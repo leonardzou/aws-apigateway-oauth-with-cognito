@@ -1,0 +1,246 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  ApiGateway REST API protected with OAuth authentication
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - prod
+
+  DomainName:
+    Type: String
+    Description: DNS domain name for ApiGateway custom domain
+
+  HostedZoneId:
+    Type: String
+    Description: Route53 Hosted Zone ID under which to create the certificate validation CNAME records
+
+Mappings:
+  Environment:
+    dev:
+      PowertoolsLoggerLogEvent: true
+      LogLevel: DEBUG
+      LogRetention: 7
+    prod:
+      PowertoolsLoggerLogEvent: false
+      LogLevel: INFO
+      LogRetention: 365
+
+Globals:
+  Function:
+    Runtime: python3.9
+    MemorySize: 256
+    Architectures:
+      - arm64
+    Environment:
+      Variables:
+        LOG_LEVEL: !FindInMap [Environment, !Ref Environment, LogLevel]
+        ENVIRONMENT: !Ref Environment
+        POWERTOOLS_LOGGER_LOG_EVENT: !FindInMap [Environment, !Ref Environment, PowertoolsLoggerLogEvent]
+    Layers:
+      - !Sub arn:aws:lambda:${AWS::Region}:017000801446:layer:AWSLambdaPowertoolsPythonV2-Arm64:21
+
+Conditions:
+  IsDevEnvironment: !Equals [!Ref Environment, dev]
+
+Resources:
+  Api:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub ${AWS::StackName}
+      Auth:
+        Authorizers:
+          CognitoOAuth2:
+            UserPoolArn: !GetAtt UserPool.Arn
+            AuthorizationScopes:
+              - resource_name/action_name
+      DisableExecuteApiEndpoint: true
+      Domain:
+        DomainName: !Ref DomainName
+        CertificateArn: !Ref ApiCustomDomainCertificate
+        EndpointConfiguration: REGIONAL
+        Route53:
+          HostedZoneId: !Ref HostedZone
+        SecurityPolicy: TLS_1_2
+      EndpointConfiguration:
+        Type: REGIONAL
+          # from experience I've found that Regional endpoints are much less painful than
+          # EDGE endpoints if we ever need to change DNS records in the future
+      OpenApiVersion: '3.0.1'
+       # https://docs.aws.amazon.com/serverless-application-model/latest/developerguide/sam-resource-api.html#sam-api-openapiversion
+       # "AWS SAM creates a stage called Stage by default. Setting this property to any valid value will prevent the creation of the stage Stage."
+      StageName: !Ref Environment
+      TracingEnabled: false
+      AccessLogSetting:
+        DestinationArn: !GetAtt ApiAccessLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","extendedRequestId":"$context.extendedRequestId","ip": "$context.identity.sourceIp","caller":"$context.identity.caller","user":"$context.identity.user","requestTime":"$context.requestTime","httpMethod":"$context.httpMethod","path":"$context.path","status":"$context.status","protocol":"$context.protocol","responseLength":"$context.responseLength"}'
+          # https://docs.aws.amazon.com/apigateway/latest/developerguide/api-gateway-mapping-template-reference.html#context-variable-reference
+
+  ApiAccessLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: !Sub /aws/apigateway/access-logs/${Environment}/${AWS::Region}/${Api}
+      RetentionInDays: !FindInMap [Environment, !Ref Environment, LogRetention]
+
+  ApiCustomDomainCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Ref DomainName
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Ref DomainName
+          HostedZoneId: !Ref HostedZoneId
+
+  ApiResponderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Description: Lambda function to respond to API requests
+      CodeUri: lambdas/api-responder
+      Handler: src.app.lambda_handler
+      Timeout: 30
+      Environment:
+        Variables:
+          POWERTOOLS_SERVICE_NAME: api-responder
+      Events:
+        RestApi:
+          Type: Api
+          Properties:
+            Path: /{proxy+}
+            Method: ANY
+            RestApiId: !Ref Api
+            Auth:
+              AuthorizationScopes:
+                - resource_name/action_name
+              Authorizer: CognitoOAuth2
+      # Policies:
+      #   - Version: 2012-10-17
+      #     Statement:
+      #       - Effect: Allow
+      #         Action:
+      #           - s3:*
+      #         Resource: '*'
+
+  ApiResponderFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Retain
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${ApiResponderFunction}" # AWS LogGroup naming pattern for Lambda is aws/lambda/<FUNCTION-NAME>
+      RetentionInDays: !FindInMap [Environment, !Ref Environment, LogRetention]
+
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub '${AWS::StackName}-userpool'
+      AccountRecoverySetting:
+        RecoveryMechanisms:
+          - Name: verified_email
+            Priority: 1
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: true
+      AliasAttributes:
+        - email # allows users to sign in using their email in addition to their username
+      AutoVerifiedAttributes: # Cognito will automatically send verification email
+        - email
+      MfaConfiguration: OPTIONAL
+      EnabledMfas:
+        - SOFTWARE_TOKEN_MFA
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 12
+          RequireLowercase: true
+          RequireNumbers: true
+          RequireSymbols: true
+          RequireUppercase: true
+          TemporaryPasswordValidityDays: 7
+      UserAttributeUpdateSettings:
+        AttributesRequireVerificationBeforeUpdate:
+          - email
+      UsernameConfiguration:
+        CaseSensitive: false
+
+  AuthDomainCertificate:
+    Type: AWS::CertificateManager::Certificate
+    Properties:
+      DomainName: !Sub 'auth.${DomainName}'
+      ValidationMethod: DNS
+      DomainValidationOptions:
+        - DomainName: !Sub 'auth.${DomainName}'
+          HostedZoneId: !Ref HostedZoneId
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      UserPoolId: !Ref UserPool
+      Domain: !Sub 'auth.${DomainName}'
+      CustomDomainConfig:
+        CertificateArn: !Ref AuthDomainCertificate
+
+  AuthDnsRecord:
+    Type: AWS::Route53::RecordSet
+    DependsOn: UserPoolDomain
+    Properties:
+      Name: !Sub 'auth.${DomainName}'
+      HostedZoneId: !Ref HostedZoneId
+      Comment: Custom auth domain for Cognito User Pool sign-up and sign-in pages
+      Type: A
+      AliasTarget:
+        HostedZoneId: Z2FDTNDATAQYW2
+          # needs to be hardcoded value for CloudFront distributions
+          # https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-properties-route53-aliastarget.html#cfn-route53-aliastarget-hostedzoneid
+        DNSName: !GetAtt UserPoolDomain.CloudFrontDistribution
+        EvaluateTargetHealth: false
+
+  UserPoolAppClient:
+    Type: AWS::Cognito::UserPoolClient
+    DependsOn:
+      - UserPoolResourceServer
+    Properties:
+      ClientName: my_app
+      UserPoolId: !Ref UserPool
+      AllowedOAuthFlows:
+        - code
+      AllowedOAuthFlowsUserPoolClient: true
+      AllowedOAuthScopes:
+        - email
+        - openid
+        - resource_name/action_name
+      CallbackURLs:
+        - https://example.com
+        - !If [IsDevEnvironment, https://oauth.pstmn.io/v1/callback, !Ref AWS::NoValue]
+        - !If [IsDevEnvironment, http://localhost:3000, !Ref AWS::NoValue]
+      ExplicitAuthFlows:
+        - ALLOW_USER_SRP_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      GenerateSecret: true
+      PreventUserExistenceErrors: ENABLED
+      RefreshTokenValidity: 60
+      TokenValidityUnits:
+        RefreshToken: days
+      SupportedIdentityProviders:
+        - COGNITO
+
+  UserPoolResourceServer:
+    Type: AWS::Cognito::UserPoolResourceServer
+    Properties:
+      Name: resource_name
+      Identifier: resource_name
+      UserPoolId: !Ref UserPool
+      Scopes:
+        - ScopeName: action_name
+          ScopeDescription: GET /action_name endpoint
+
+  UserPoolUser:
+    Type: AWS::Cognito::UserPoolUser
+    Properties:
+      UserPoolId: !Ref UserPool
+      Username: firstname.lastname
+      UserAttributes:
+        - Name: email
+          Value: test@gmail.com
+      DesiredDeliveryMediums:
+        - EMAIL
