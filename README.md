@@ -22,6 +22,7 @@ sam deploy \
     ParameterKey=Environment,ParameterValue=dev \
   #   ParameterKey=DomainName,ParameterValue=www.example.com \
   #   ParameterKey=HostedZoneId,ParameterValue=Z12345678AB9C0D12EFGH \
+  #   ParameterKey=UserPoolUserEmail,ParameterValue=test@gmail.com \
   --s3-bucket <s3_bucket_name> \ # or use --resolve-s3 \ to use sam cli managed s3 bucket
   --s3-prefix cloudformation/apigw-cognito-oauth-example \
   --capabilities CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \
