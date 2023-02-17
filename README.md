@@ -40,18 +40,18 @@ In Postman:
 2. Switch to the "Authorization" tab
 3. For "Type", select "OAuth 2.0" from the dropdown
 4. Then in the "Configuration Options" tab, set the following settings:
-   - Grant Type: Authorization Code
-   - Callback URL: `https://oauth.pstmn.io/v1/callback` (this should be the default)
+   - **Grant Type**: Authorization Code
+   - **Callback URL**: `https://oauth.pstmn.io/v1/callback` (this should be the default)
      - check the box "Authorize using browser"
-   - Auth URL: `https://auth.{DomainName}/oauth2/authorize`
+   - **Auth URL**: `https://auth.{DomainName}/oauth2/authorize`
      - refer to https://docs.aws.amazon.com/cognito/latest/developerguide/authorization-endpoint.html
-   - Access Token URL: `https://auth.{DomainName}/oauth2/token`
+   - **Access Token URL**: `https://auth.{DomainName}/oauth2/token`
      - refer to https://docs.aws.amazon.com/cognito/latest/developerguide/token-endpoint.html
-   - Client ID: retrieve your Client ID from the Amazon Cognito web console -> User pools -> select your user pool -> App integration tab -> Scroll down to the App client list -> select your app client -> copy the Client ID from the "App client information" section
-   - Client Secret: retrieve your Client Secret from the same place you retrieved the Client ID
-   - Scope: the same scope you set in [template.yaml](./template.yaml) e.g. `resource_name/action_name`
-   - State: leave blank
-   - Client Authentication: Send as Basic Auth Header
+   - **Client ID**: retrieve your Client ID from the Amazon Cognito web console -> User pools -> select your user pool -> App integration tab -> Scroll down to the App client list -> select your app client -> copy the Client ID from the "App client information" section
+   - **Client Secret**: retrieve your Client Secret from the same place you retrieved the Client ID
+   - **Scope**: the same scope you set in [template.yaml](./template.yaml) e.g. `resource_name/action_name`
+   - **State**: leave blank
+   - **Client Authentication**: Send as Basic Auth Header
    
    Then click "Get New Access Token"
 
