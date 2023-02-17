@@ -19,6 +19,10 @@ Parameters:
     Type: String
     Description: Route53 Hosted Zone ID under which to create the certificate validation CNAME records
 
+  UserPoolUserEmail:
+    Type: String
+    Description: The email to use for the Cognito User Pool user. The temporary password will automatically be emailed to this email address.
+
 Mappings:
   Environment:
     dev:
@@ -274,6 +278,6 @@ Resources:
       Username: firstname.lastname
       UserAttributes:
         - Name: email
-          Value: test@gmail.com
+          Value: !Ref UserPoolUserEmail
       DesiredDeliveryMediums:
         - EMAIL
