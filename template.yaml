@@ -59,13 +59,6 @@ Resources:
             AuthorizationScopes:
               - resource_name/action_name
       DisableExecuteApiEndpoint: true
-      Domain:
-        DomainName: !Ref DomainName
-        CertificateArn: !Ref ApiCustomDomainCertificate
-        EndpointConfiguration: REGIONAL
-        Route53:
-          HostedZoneId: !Ref HostedZone
-        SecurityPolicy: TLS_1_2
       EndpointConfiguration:
         Type: REGIONAL
           # from experience I've found that Regional endpoints are much less painful than
@@ -95,6 +88,37 @@ Resources:
       DomainValidationOptions:
         - DomainName: !Ref DomainName
           HostedZoneId: !Ref HostedZoneId
+
+  # we can't make use of the convenient "Domain" property on AWS::Serverless::Api
+  # instead we need to explicitly specify DomainName, BasePathMapping, and RecordSetGroup resources
+  # so that we can add ApiGatewayRecordSetGroup as a dependency for the UserPoolDomain
+  ApiGatewayDomainName:
+    Type: AWS::ApiGateway::DomainName
+    Properties:
+      DomainName: !Ref DomainName
+      RegionalCertificateArn: !Ref ApiCustomDomainCertificate
+      EndpointConfiguration:
+        Types:
+          - REGIONAL
+      SecurityPolicy: TLS_1_2
+
+  ApiBasePathMapping:
+    Type: AWS::ApiGateway::BasePathMapping
+    Properties:
+      DomainName: !Ref 'ApiGatewayDomainName'
+      RestApiId: !Ref 'Api'
+      Stage: !Ref 'ApiStage' # implicitly generated resource
+
+  ApiGatewayRecordSetGroup:
+    Type: AWS::Route53::RecordSetGroup
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      RecordSets:
+        - Name: !Ref DomainName
+          Type: A
+          AliasTarget:
+            HostedZoneId: !GetAtt 'ApiGatewayDomainName.RegionalHostedZoneId'
+            DNSName: !GetAtt 'ApiGatewayDomainName.RegionalDomainName'
 
   ApiResponderFunction:
     Type: AWS::Serverless::Function
@@ -174,6 +198,15 @@ Resources:
 
   UserPoolDomain:
     Type: AWS::Cognito::UserPoolDomain
+    DependsOn:
+      - ApiGatewayRecordSetGroup
+      # refer to: https://aws.amazon.com/premiumsupport/knowledge-center/cognito-custom-domain-errors/
+      # """
+      # To create an Amazon Cognito custom domain, the parent domain must have a Domain Name System (DNS) A record.
+      # [i.e.] The [...] domain that's one step up in the domain hierarchy
+      # For example, if your custom domain is auth.xyz.yourdomain.com then
+      # Amazon Cognito must resolve xyz.yourdomain.com to an IP address.
+      # """
     Properties:
       UserPoolId: !Ref UserPool
       Domain: !Sub 'auth.${DomainName}'
